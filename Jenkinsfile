@@ -2,11 +2,8 @@ pipeline {
     agent any
 
     environment {
-        // Replace with your Webex room ID
+        // Your Webex room ID (this looks correct from your log)
         WEBEX_ROOM_ID = '6d089b90-c051-11f0-b550-a16ba4dd4e16'
-
-        // Jenkins credential: "Secret text" with ID 'webex-bot-token'
-        WEBEX_BOT_TOKEN = credentials('webex-bot-token')
     }
 
     stages {
@@ -24,7 +21,7 @@ pipeline {
 
         stage('Security Scan - Trivy') {
             steps {
-                // Trivy may return non-zero, so we use || true and enforce policy later
+                // Run Trivy; don't fail the build here, enforce policy in next stage
                 sh '''
                     trivy image \
                       --format json \
@@ -56,24 +53,25 @@ pipeline {
     post {
         always {
             script {
+                // Get the final status of the build
                 def status = currentBuild.currentResult
 
-                // Pass values into env vars so we don't interpolate secrets into the shell
-                withEnv([
-                    "WEBEX_BOT_TOKEN=${WEBEX_BOT_TOKEN}",
-                    "PIPELINE_STATUS=${status}",
-                    "PIPELINE_BUILD_NUMBER=${BUILD_NUMBER}",
-                    "PIPELINE_JOB_NAME=${JOB_NAME}",
-                    "PIPELINE_BUILD_URL=${BUILD_URL}"
-                ]) {
-                    sh '''
-                        python3 scripts/send_webex_notification.py \
-                            "$WEBEX_ROOM_ID" \
-                            "$PIPELINE_STATUS" \
-                            "$PIPELINE_BUILD_NUMBER" \
-                            "$PIPELINE_JOB_NAME" \
-                            "$PIPELINE_BUILD_URL"
-                    '''
+                // Pull the Webex bot token from Jenkins credentials
+                withCredentials([string(credentialsId: 'webex-bot-token', variable: 'WEBEX_BOT_TOKEN')]) {
+                    // Pass data to the shell via env vars to avoid Groovy interpolation issues
+                    withEnv([
+                        "WEBEX_BOT_TOKEN=${WEBEX_BOT_TOKEN}",
+                        "PIPELINE_STATUS=${status}"
+                    ]) {
+                        sh '''
+                            python3 scripts/send_webex_notification.py \
+                                "$WEBEX_ROOM_ID" \
+                                "$PIPELINE_STATUS" \
+                                "$BUILD_NUMBER" \
+                                "$JOB_NAME" \
+                                "$BUILD_URL"
+                        '''
+                    }
                 }
             }
         }
