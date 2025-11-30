@@ -2,11 +2,11 @@ pipeline {
     agent any
 
     environment {
-        // Replace with your real Webex room ID
+        // Replace with your Webex room ID
         WEBEX_ROOM_ID = '6d089b90-c051-11f0-b550-a16ba4dd4e16'
 
-        // Jenkins credential: kind "Secret text", id "webex-bot-token"
-        WEBEX_BOT_TOKEN = credentials('N2VjYzI2YjMtZWQxNC00YjAxLWJiZTQtZWY3Yjc4M2YzMDc5YzllNmM5NTEtYjI4_P0A1_13494cac-24b4-4f89-8247-193cc92a7636')
+        // Jenkins credential: "Secret text" with ID 'webex-bot-token'
+        WEBEX_BOT_TOKEN = credentials('webex-bot-token')
     }
 
     stages {
@@ -16,39 +16,27 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies (for scripts)') {
-            steps {
-                sh 'pip install --user requests'
-            }
-        }
-
-        stage('Build & Test') {
-            steps {
-                sh 'echo "No automated tests yet - add pytest here if you want"'
-                // Example: sh 'pytest'
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t secure-app:${BUILD_NUMBER} .'
+                sh 'docker build -t devsecops-app:${BUILD_NUMBER} .'
             }
         }
 
         stage('Security Scan - Trivy') {
             steps {
-                // --exit-code 0 so Trivy itself doesn't fail the build; we handle policy in evaluate_trivy.py
+                // Trivy may return non-zero, so we use || true and enforce policy later
                 sh '''
-                    trivy image --format json \
+                    trivy image \
+                      --format json \
                       --output trivy-report.json \
-                      secure-app:${BUILD_NUMBER} || true
+                      devsecops-app:${BUILD_NUMBER} || true
                 '''
             }
         }
 
         stage('Evaluate Security Policy') {
             steps {
-                sh 'python scripts/evaluate_trivy.py trivy-report.json'
+                sh 'python3 scripts/evaluate_trivy.py trivy-report.json'
             }
         }
 
@@ -60,9 +48,7 @@ pipeline {
                 }
             }
             steps {
-                sh 'echo "Mock deploy: secure-app:${BUILD_NUMBER} (no real deployment)"'
-                // You could instead run the container here:
-                // sh 'docker run -d -p 5000:5000 secure-app:${BUILD_NUMBER}'
+                sh 'echo "Mock deploy of devsecops-app:${BUILD_NUMBER} (no real deployment)"'
             }
         }
     }
@@ -71,15 +57,24 @@ pipeline {
         always {
             script {
                 def status = currentBuild.currentResult
-                sh """
-                    WEBEX_BOT_TOKEN="${WEBEX_BOT_TOKEN}" \
-                    python scripts/send_webex_notification.py \
-                        "${WEBEX_ROOM_ID}" \
-                        "${status}" \
-                        "${BUILD_NUMBER}" \
-                        "${JOB_NAME}" \
-                        "${BUILD_URL}"
-                """
+
+                // Pass values into env vars so we don't interpolate secrets into the shell
+                withEnv([
+                    "WEBEX_BOT_TOKEN=${WEBEX_BOT_TOKEN}",
+                    "PIPELINE_STATUS=${status}",
+                    "PIPELINE_BUILD_NUMBER=${BUILD_NUMBER}",
+                    "PIPELINE_JOB_NAME=${JOB_NAME}",
+                    "PIPELINE_BUILD_URL=${BUILD_URL}"
+                ]) {
+                    sh '''
+                        python3 scripts/send_webex_notification.py \
+                            "$WEBEX_ROOM_ID" \
+                            "$PIPELINE_STATUS" \
+                            "$PIPELINE_BUILD_NUMBER" \
+                            "$PIPELINE_JOB_NAME" \
+                            "$PIPELINE_BUILD_URL"
+                    '''
+                }
             }
         }
     }
